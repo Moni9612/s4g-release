@@ -19,18 +19,18 @@ THETA_NUM = len(THETA_SEARCH)
 
 
 class GenerateContactObjectData:
-    def __init__(self, model_dir, output_dir):
+    def __init__(self, model_dir, output_dir): #For loading object meshes and saving results.
         self.model_dir = model_dir
         self.output_dir = output_dir
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') #Determines whether a GPU (CUDA) or CPU is used for computations.
         self.zeros_x_direction = torch.tensor([[0, 1, 0]], device=self.device).float()
-
+        # Initialize transformation matrices for local-to-local frame search
         # Common data pre-processing
         numpy_frame_move_back = np.eye(4)
         numpy_frame_move_back[0, 3] = -(config.FINGER_LENGTH - GASKET_RADIUS)
         numpy_local_search_to_local = np.tile(np.eye(4), (THETA_NUM, 1, 1))
         for i in range(THETA_NUM):
-            numpy_local_search_to_local[i, 0, 0] = np.cos(THETA_SEARCH[i] / 180 * np.pi)
+            numpy_local_search_to_local[i, 0, 0] = np.cos(THETA_SEARCH[i] / 180 * np.pi) # search angles (THETA_SEARCH): Predefined angles for grasp frame search.
             numpy_local_search_to_local[i, 2, 2] = np.cos(THETA_SEARCH[i] / 180 * np.pi)
             numpy_local_search_to_local[i, 0, 2] = np.sin(THETA_SEARCH[i] / 180 * np.pi)
             numpy_local_search_to_local[i, 2, 0] = -np.sin(THETA_SEARCH[i] / 180 * np.pi)
@@ -39,12 +39,12 @@ class GenerateContactObjectData:
                                                         device=self.device)
         self.torch_local_to_local_search = torch.inverse(self.torch_local_search_to_local)
 
-    def dump(self, data, name):
+    def dump(self, data, name): # method saves the generated grasp data (point cloud, frame, score) into a .pkl file.
         with open(os.path.join(self.output_dir, '{}.pkl'.format(name)), 'wb') as f:
             pickle.dump(data, f)
         print('Dump to file of {} with keys: {}'.format(name, data.keys()))
 
-    def run_loop(self, object_names):
+    def run_loop(self, object_names): #processes a list of object names, loads their meshes, samples point clouds, and computes grasp-related data like valid contact pairs and grasp frames.
         for _, name in enumerate(object_names):
             print('Begin object {}'.format(name))
             tic = time()
@@ -52,23 +52,24 @@ class GenerateContactObjectData:
             ply_path = os.path.join(self.model_dir, "{}.obj".format(name))
             mesh = open3d.io.read_triangle_mesh(ply_path)
             mesh.compute_vertex_normals()
-            pc = mesh.sample_points_uniformly(np.asarray(mesh.vertices).shape[0] * 10)
+            pc = mesh.sample_points_uniformly(np.asarray(mesh.vertices).shape[0] * 10) #For each object, the mesh is read and a point cloud is generated.
             pc = pc.voxel_down_sample(0.004)
 
             points = np.asarray(pc.points)
             normals = np.asarray(pc.normals)
             normals /= np.linalg.norm(normals, axis=1, keepdims=True)
             kd_tree = open3d.geometry.KDTreeFlann(pc)
-            # normals = self.smooth_normal(normals, points, kd_tree)
+            # normals = self.smooth_normal(normals, points, kd_tree) # Normal vector calculation: Normals are computed and normalized for each point.
             pc.normals = open3d.utility.Vector3dVector(normals)
 
             data_dict.update({'cloud': points, 'normal': normals})
-            valid_row, valid_column, all_antipodal_score = self.cache_contact_pair(points, normals)
+            valid_row, valid_column, all_antipodal_score = self.cache_contact_pair(points, normals) #Determines valid contact pairs between points based on proximity and normal direction.
 
             frames, local_search_scores, antipodal_score = self._estimate_grasp_quality(points, valid_row, valid_column,
-                                                                                        all_antipodal_score)
-            frame_neighbor_index = self.get_frame_neighbor(frames, kd_tree)
+                                                                                        all_antipodal_score)# For valid contact points, grasp frames are calculated using the antipodal grasping approach.
+            frame_neighbor_index = self.get_frame_neighbor(frames, kd_tree) 
 
+            #Saving data: Saves computed data in a pickle file.
             data_dict.update(
                 {"global_to_local": frames, "search_score": local_search_scores, "antipodal_score": antipodal_score})
             data_dict.update({'frame_point_index': frame_neighbor_index})
@@ -76,7 +77,7 @@ class GenerateContactObjectData:
             print("Finish {} with time: {}s".format(name, time() - tic))
             self.dump(data_dict, name)
 
-    def get_frame_neighbor(self, frames, kd_tree):
+    def get_frame_neighbor(self, frames, kd_tree):# This method finds the closest point in the point cloud to each frame, essentially assigning a "neighbor" to each frame.
         frame_neighbor_index = np.ones(frames.shape[0], dtype=np.int) * -1
         for j in range(frames.shape[0]):
             local_to_global = np.linalg.inv(frames[j])
@@ -85,7 +86,7 @@ class GenerateContactObjectData:
             frame_neighbor_index[j] = idx[0]
         return frame_neighbor_index
 
-    def smooth_normal(self, normals, points, kd_tree):
+    def smooth_normal(self, normals, points, kd_tree): #refines the normal vectors of points in a 3D point cloud by averaging them with their neighbors to reduce noise.
         smooth_normals = np.copy(normals)
         for i in range(points.shape[0]):
             single_normal = normals[i, :]
@@ -100,7 +101,7 @@ class GenerateContactObjectData:
         smooth_normals /= np.linalg.norm(smooth_normals, axis=1, keepdims=True)
         return smooth_normals
 
-    def cache_contact_pair(self, points, normals):
+    def cache_contact_pair(self, points, normals):#This method calculates valid contact pairs
         dist = sklearn.metrics.pairwise_distances(points)
         within_distance_bool = dist < config.HALF_BOTTOM_SPACE * 2
         distance_vector = -points[:, np.newaxis, :] + points[np.newaxis, :, :]
@@ -122,7 +123,8 @@ class GenerateContactObjectData:
 
         return valid_row, valid_column, antipodal_score
 
-    def _estimate_grasp_quality(self, points: np.ndarray, row_index, col_index, antipodal_score):
+    def _estimate_grasp_quality(self, points: np.ndarray, row_index, col_index, antipodal_score):#this method estimates the grasp quality by creating local frames for 
+                                                                                                 #valid contact pairs, checking for collision, and accumulating search scores.
         torch_points = torch.tensor(points, device=self.device).float()
         torch_points_homo = torch.cat([torch_points.transpose(1, 0),
                                        torch.ones(1, torch_points.shape[0], dtype=torch.float, device=self.device)],
@@ -165,7 +167,7 @@ class GenerateContactObjectData:
             valid_frame_antipodal_scores)
 
     def check_collision(self, torch_points_homo, T_global_to_local, frame_scores, frame, row, col, antipodal_score,
-                        valid_frame_antipodal_scores):
+                        valid_frame_antipodal_scores): #checks if the grasp frame created for a given pair of points collides with the object, considering predefined margins for the object and finger regions.
         local_cloud = torch.matmul(T_global_to_local, torch_points_homo)
 
         close_plane_bool = (local_cloud[1, :] < config.HALF_BOTTOM_SPACE) & \
