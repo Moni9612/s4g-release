@@ -15,26 +15,30 @@ from grasp_proposal.utils.logger import setup_logger, MetricLogger
 
 
 def load_static_data_batch():
-    single_training_data = np.load("/home/sim/project/s4g/2638_view_0.p", allow_pickle=True)
+    single_training_data = np.load("/home/sim/project/s4g/2638_view_0.p", allow_pickle=True) #Reads a point cloud dataset as a .p file. The file contains a point_cloud array with the 3D coordinates of the points.
     cloud_array = single_training_data["point_cloud"]
-    cloud = CloudPreProcessor(open3d.geometry.PointCloud(open3d.utility.Vector3dVector(cloud_array.T)), False)
+    cloud = CloudPreProcessor(open3d.geometry.PointCloud(open3d.utility.Vector3dVector(cloud_array.T)), False) #convert to open3D format.
 
     # do not filter workspace here since training data
-    cloud.voxelize()
-    cloud.remove_outliers()
+    cloud.voxelize() # reduce the resolution of the point cloud for faster processing.
+    cloud.remove_outliers() # cleans noisy points to improve accuracy.
     points = np.asarray(cloud.pcd.points)
+    
+    # Ensure a consistent number of points (25600) for model input. If the point cloud has fewer points, it duplicates some points.
     if points.shape[0] > 25600:
         random_index = np.random.choice(np.arange(points.shape[0]), 25600, replace=False)
     else:
         random_index = np.random.choice(np.arange(points.shape[0]), 25600, replace=True)
 
-    points = points[random_index, :]
+#A PyTorch tensor is a multi-dimensional array that is used to store and process data in machine learning applications. It is similar to NumPy arrays but with added capabilities, 
+#such as being able to run computations on GPUs for faster performance.
+    points = points[random_index, :] #Converts the point cloud into a PyTorch tensor with dimensions [1, 3, 25600] (batch size 1, 3 coordinates, 25600 points).
     data_batch = {"scene_points": torch.tensor(points, dtype=torch.float32).unsqueeze(0).transpose(1, 2)}
     return data_batch, cloud.pcd
 
 
 def main():
-    cfg_path = "./configs/curvature_model.yaml"
+    cfg_path = "./configs/curvature_model.yaml" #load_cfg_from_file: Loads the configuration file, which defines the model, hyperparameters, and paths
     cfg = load_cfg_from_file(cfg_path)
     cfg.TEST.WEIGHT = cfg.TEST.WEIGHT.replace("${PROJECT_HOME}", os.path.join(os.path.dirname(__file__), "../"))
     cfg.freeze()
@@ -43,6 +47,7 @@ def main():
     output_dir = "./output"
     os.makedirs(output_dir, exist_ok=True)
 
+    #Initializes a logger to capture runtime information:Number of GPUs available, Path to the configuration file
     logger = setup_logger("S4G", output_dir, "unit_test")
     logger.info("Using {} of GPUs".format(torch.cuda.device_count()))
     logger.info("Load config file from {}".format(cfg_path))
