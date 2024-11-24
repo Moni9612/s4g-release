@@ -53,30 +53,30 @@ def main():
     logger.info("Load config file from {}".format(cfg_path))
     logger.debug("Running with config \n {}".format(cfg))
 
-    model, _, _ = build_model(cfg)
-    if torch.cuda.device_count() > 1:
+    model, _, _ = build_model(cfg) # build_model: Constructs the grasp detection model based on the configuration
+    if torch.cuda.device_count() > 1: #If multiple GPUs are available, uses DataParallel for parallel execution.
         model = nn.DataParallel(model).cuda()
-    elif torch.cuda.device_count() == 1:
+    elif torch.cuda.device_count() == 1:# If only one GPU is available, moves the model to the GPU
         model = model.cuda()
 
     trained_model_path = output_dir
-    check_pointer = CheckPointer(model, save_dir=trained_model_path, logger=logger)
-    if cfg.TEST.WEIGHT:
+    check_pointer = CheckPointer(model, save_dir=trained_model_path, logger=logger) # checkPointer: manages saving/loading model weights
+    if cfg.TEST.WEIGHT:# if a specific weight file is there, it loads the weights
         weight_path = cfg.TEST.WEIGHT.replace("@", output_dir)
         check_pointer.load(weight_path, resume=False)
-    else:
+    else: # if not resumes training from the last checkpoint in the save directory
         check_pointer.load(None, resume=True)
 
     # Test
     model.eval()
     meters = MetricLogger(delimiter="  ")
-    data_batch, pcd = load_static_data_batch()
+    data_batch, pcd = load_static_data_batch() # Calls load_static_data_batch to prepare a test point cloud batch
     tic = time.time()
-    with torch.no_grad():
+    with torch.no_grad(): # use torch.no_grad to disable gradient computation (for efficiency)
         data_batch = {k: v.cuda(non_blocking=True) for k, v in data_batch.items() if isinstance(v, torch.Tensor)}
         tac = time.time()
         data_time = tac - tic
-        predictions = model(data_batch)
+        predictions = model(data_batch) #Processes the point cloud through the model to get grasp pose predictions.
         tic = time.time()
         batch_time = tic - tac
         with open("inference_time_{}.txt".format("ours"), "a+") as f:
@@ -85,10 +85,10 @@ def main():
 
         logger.info(meters.delimiter.join(["{meters}", ]).format(meters=str(meters), ))
 
-        top_poses, score = loggin_to_file(data_batch, predictions, 0, output_dir, prefix="test", with_label=False)
-        visualizer = GraspVisualizer(pcd)
-        visualizer.add_multiple_poses(top_poses)
-        visualizer.visualize()
+        top_poses, score = loggin_to_file(data_batch, predictions, 0, output_dir, prefix="test", with_label=False) #loggin_to_file extracts the top-ranked grasp poses and scores from the predictions.
+        visualizer = GraspVisualizer(pcd) # adds the predicted grasp poses to the point cloud
+        visualizer.add_multiple_poses(top_poses) 
+        visualizer.visualize() #render the 3d visualization of the results
 
 
 if __name__ == '__main__':
